@@ -1,0 +1,184 @@
+groups:
+
+  # ── GenAI / LLM Inference Alerts ─────────────────────────────
+  - name: genai_pipeline
+    interval: 30s
+    rules:
+
+      # High error rate on LLM calls
+      - alert: GenAIHighErrorRate
+        expr: |
+          (
+            rate(genai_requests_total{status="error"}[5m])
+            /
+            rate(genai_requests_total[5m])
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          team: ai-platform
+          pipeline: genai
+        annotations:
+          summary: "GenAI error rate above 5% for {{ $labels.model }}"
+          description: |
+            LLM inference error rate is {{ $value | humanizePercentage }} over the last 5 minutes.
+            Service: {{ $labels.service }}, Model: {{ $labels.model }}
+          runbook_url: "https://wiki.internal/runbooks/genai-high-error-rate"
+
+      # P99 latency too high (user-facing SLO)
+      - alert: GenAIHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(genai_request_duration_seconds_bucket[5m])
+          ) > 10
+        for: 3m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: genai
+        annotations:
+          summary: "GenAI P99 latency above 10s for {{ $labels.service }}"
+          description: |
+            P99 latency is {{ $value | humanizeDuration }}.
+            This breaches the 10s SLO for real-time inference.
+            Model: {{ $labels.model }}
+
+      # Rate limit hits from Groq API
+      - alert: GenAIRateLimitHigh
+        expr: rate(genai_rate_limit_hits_total[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: genai
+        annotations:
+          summary: "Groq API rate limits hitting frequently"
+          description: |
+            Rate limit hits: {{ $value | humanize }} per second over last 5 minutes.
+            Consider: request batching, model fallback, or tier upgrade.
+
+      # No requests being processed (dead pipeline)
+      - alert: GenAIPipelineDead
+        expr: rate(genai_requests_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: ai-platform
+          pipeline: genai
+        annotations:
+          summary: "GenAI pipeline is processing ZERO requests"
+          description: |
+            No LLM inference requests processed in the last 5 minutes.
+            Check if the service is up and Kafka consumers are running.
+
+      # Token cost spike — budget alert
+      - alert: GenAITokenCostSpike
+        expr: |
+          rate(genai_tokens_total{type="output"}[1h]) * 60
+          > 100000
+        for: 5m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: genai
+        annotations:
+          summary: "GenAI token usage unusually high — check for prompt injection or runaway loops"
+          description: |
+            Output token rate: {{ $value | humanize }} tokens/hour.
+            This could indicate runaway agent loops or prompt injection.
+
+      # Context window saturation
+      - alert: GenAIContextWindowHigh
+        expr: genai_context_window_utilization > 0.85
+        for: 1m
+        labels:
+          severity: warning
+          team: ai-platform
+        annotations:
+          summary: "LLM context window above 85% — risk of truncation"
+          description: |
+            Context utilization: {{ $value | humanizePercentage }}.
+            Long documents or agent histories may get truncated silently.
+
+  # ── Agentic AI Pipeline Alerts ───────────────────────────────
+  - name: agentic_pipeline
+    interval: 30s
+    rules:
+
+      # Agent hitting max steps (stuck in loop)
+      - alert: AgentMaxStepsReached
+        expr: rate(agent_max_steps_reached_total[10m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          team: ai-platform
+          pipeline: agentic
+        annotations:
+          summary: "Agents hitting max steps limit — possible infinite loop"
+          description: |
+            {{ $value | humanize }} sessions/min are hitting the step limit.
+            Agents: {{ $labels.agent_name }}. Check for circular tool dependencies.
+
+      # Tool call failure rate high
+      - alert: AgentToolFailureRate
+        expr: |
+          (
+            rate(agent_tool_calls_total{status="error"}[5m])
+            /
+            rate(agent_tool_calls_total[5m])
+          ) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: agentic
+        annotations:
+          summary: "Agent tool {{ $labels.tool_name }} failing at > 10%"
+          description: |
+            Tool failure rate: {{ $value | humanizePercentage }}.
+            Tool: {{ $labels.tool_name }}, Agent: {{ $labels.agent_name }}
+
+      # Agent session taking too long
+      - alert: AgentSessionLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            rate(agent_session_duration_seconds_bucket[5m])
+          ) > 120
+        for: 5m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: agentic
+        annotations:
+          summary: "Agent sessions taking > 2 minutes at P95"
+          description: |
+            P95 session duration: {{ $value | humanizeDuration }}.
+            Long sessions exhaust LLM context and increase cost.
+
+      # Agent orchestration queue depth growing
+      - alert: AgentQueueDepthGrowing
+        expr: agent_queue_depth > 50
+        for: 3m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: agentic
+        annotations:
+          summary: "Agent task queue backing up"
+          description: |
+            Queue depth: {{ $value }} pending tasks.
+            Consider scaling up agent workers.
+
+      # Hallucination detection spike
+      - alert: AgentHallucinationSpike
+        expr: rate(agent_hallucinations_detected_total[10m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: ai-platform
+          pipeline: agentic
+        annotations:
+          summary: "Elevated hallucination detection rate in agent responses"
+          description: |
+            Detected hallucinations: {{ $value | humanize }} per second.
+            Review recent prompts and add guardrail checks.

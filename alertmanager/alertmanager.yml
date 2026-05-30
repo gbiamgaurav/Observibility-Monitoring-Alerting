@@ -1,0 +1,119 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: 'http://localhost:9999/placeholder'  # replace with real Slack webhook URL in production
+
+# ── Routing Tree ────────────────────────────────────────────────
+# Routes determine WHO gets paged and HOW FAST based on severity/team.
+route:
+  receiver: 'slack-default'
+  group_by: ['alertname', 'pipeline', 'service']
+  group_wait: 30s        # wait before sending first notification (batch related alerts)
+  group_interval: 5m     # wait before re-sending for same group
+  repeat_interval: 4h    # re-notify if still firing
+
+  routes:
+    # Critical AI pipeline alerts → immediate page
+    - match:
+        severity: critical
+        team: ai-platform
+      receiver: 'pagerduty-ai-platform'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Critical infra alerts → immediate page
+    - match:
+        severity: critical
+        team: platform
+      receiver: 'pagerduty-platform'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # ML-ops warnings → Slack only
+    - match:
+        team: ml-ops
+      receiver: 'slack-ml-ops'
+      repeat_interval: 8h
+
+    # Data engineering alerts
+    - match:
+        team: data-engineering
+      receiver: 'slack-data-eng'
+      repeat_interval: 4h
+
+    # Catch-all warnings → default Slack
+    - match:
+        severity: warning
+      receiver: 'slack-default'
+      repeat_interval: 8h
+
+# ── Inhibition Rules ────────────────────────────────────────────
+# Suppress lower-severity alerts when a higher-severity already fires.
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service', 'pipeline']
+
+  # If the whole service is down, suppress individual error-rate alerts
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match_re:
+      alertname: '.*ErrorRate|.*Latency'
+    equal: ['service']
+
+# ── Receivers ───────────────────────────────────────────────────
+receivers:
+
+  - name: 'slack-default'
+    slack_configs:
+      - channel: '#alerts-prod'
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Severity:* `{{ .Labels.severity }}`
+          *Pipeline:* `{{ .Labels.pipeline }}`
+          *Description:* {{ .Annotations.description }}
+          {{ if .Annotations.runbook_url }}*Runbook:* {{ .Annotations.runbook_url }}{{ end }}
+          {{ end }}
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+
+  - name: 'slack-ml-ops'
+    slack_configs:
+      - channel: '#alerts-ml-ops'
+        send_resolved: true
+        title: '[ML-OPS {{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+
+  - name: 'slack-data-eng'
+    slack_configs:
+      - channel: '#alerts-data-eng'
+        send_resolved: true
+        title: '[DATA-ENG {{ .Status | toUpper }}] {{ .CommonAnnotations.summary }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+
+  - name: 'pagerduty-ai-platform'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        severity: '{{ .CommonLabels.severity }}'
+        description: '{{ .CommonAnnotations.summary }}'
+        details:
+          pipeline: '{{ .CommonLabels.pipeline }}'
+          description: '{{ .CommonAnnotations.description }}'
+          runbook: '{{ .CommonAnnotations.runbook_url }}'
+
+  - name: 'pagerduty-platform'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        severity: 'critical'
+        description: '{{ .CommonAnnotations.summary }}'

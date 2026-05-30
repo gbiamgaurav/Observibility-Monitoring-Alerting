@@ -1,0 +1,64 @@
+groups:
+
+  # ── Infrastructure Alerts ─────────────────────────────────────
+  - name: infrastructure
+    interval: 30s
+    rules:
+
+      # High CPU
+      - alert: HighCPUUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "CPU usage above 85% on {{ $labels.instance }}"
+          description: "CPU: {{ $value | humanize }}%. This can slow down model inference."
+
+      # High Memory
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Memory usage above 85% on {{ $labels.instance }}"
+          description: "Memory: {{ $value | humanize }}% used. Risk of OOM kills for ML models."
+
+      # Disk space running out
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Disk space below 15% on {{ $labels.instance }}"
+          description: "Available: {{ $value | humanize }}%. Log accumulation from AI pipelines can fill disk fast."
+
+      # Service instance down
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Service {{ $labels.job }} is DOWN"
+          description: "Instance {{ $labels.instance }} has been unreachable for > 1 minute."
+
+      # Elasticsearch cluster health
+      - alert: ElasticsearchClusterRed
+        expr: elasticsearch_cluster_health_status{color="red"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Elasticsearch cluster is RED — log storage unavailable"
+          description: "Kibana dashboards and log searches will fail."

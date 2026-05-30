@@ -1,0 +1,156 @@
+groups:
+
+  # ── Traditional ML Pipeline Alerts ───────────────────────────
+  - name: ml_pipeline
+    interval: 60s
+    rules:
+
+      # Model inference error rate
+      - alert: MLInferenceErrorRate
+        expr: |
+          (
+            rate(ml_inference_requests_total{status="error"}[5m])
+            /
+            rate(ml_inference_requests_total[5m])
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          team: ml-ops
+          pipeline: ml
+        annotations:
+          summary: "ML inference error rate above 1% for {{ $labels.model_name }}"
+          description: |
+            Error rate: {{ $value | humanizePercentage }}.
+            Model: {{ $labels.model_name }}, Version: {{ $labels.model_version }}
+
+      # Inference latency SLO breach
+      - alert: MLInferenceLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            rate(ml_inference_duration_seconds_bucket[5m])
+          ) > 2.0
+        for: 3m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "ML P99 inference latency above 2s"
+          description: |
+            P99: {{ $value | humanizeDuration }}.
+            Model: {{ $labels.model_name }}. Check for feature computation bottleneck.
+
+      # Data drift detected
+      - alert: MLDataDriftDetected
+        expr: ml_data_drift_score > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          team: ml-ops
+          pipeline: ml
+        annotations:
+          summary: "Data drift detected for model {{ $labels.model_name }}"
+          description: |
+            Drift score: {{ $value }} (threshold: 0.3).
+            Feature: {{ $labels.feature_name }}.
+            The model may need retraining — review input distribution.
+
+      # Model accuracy degradation
+      - alert: MLModelAccuracyDrop
+        expr: ml_model_accuracy < 0.80
+        for: 15m
+        labels:
+          severity: critical
+          team: ml-ops
+          pipeline: ml
+        annotations:
+          summary: "Model accuracy dropped below 80%"
+          description: |
+            Current accuracy: {{ $value | humanizePercentage }}.
+            Model: {{ $labels.model_name }}, Version: {{ $labels.model_version }}.
+            Trigger retraining pipeline and consider rolling back to previous version.
+
+      # High feature missing rate (data quality)
+      - alert: MLHighFeatureMissingRate
+        expr: ml_feature_missing_rate > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: data-engineering
+        annotations:
+          summary: "High missing feature rate for {{ $labels.feature_name }}"
+          description: |
+            Missing rate: {{ $value | humanizePercentage }}.
+            This degrades model predictions. Check upstream data pipeline.
+
+      # Prediction confidence low (model uncertain)
+      - alert: MLLowPredictionConfidence
+        expr: |
+          histogram_quantile(0.50,
+            rate(ml_prediction_confidence_bucket[10m])
+          ) < 0.60
+        for: 10m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "Median prediction confidence below 60%"
+          description: |
+            Median confidence: {{ $value | humanizePercentage }}.
+            Model is uncertain — could indicate distribution shift.
+
+      # Training pipeline stalled
+      - alert: MLTrainingPipelineStalled
+        expr: time() - ml_last_training_completed_timestamp > 86400
+        for: 1m
+        labels:
+          severity: warning
+          team: ml-ops
+        annotations:
+          summary: "ML training pipeline has not completed in 24h"
+          description: |
+            Last training: {{ $value | humanizeDuration }} ago.
+            Check training job status and feature store freshness.
+
+  # ── Kafka Pipeline Alerts ─────────────────────────────────────
+  - name: kafka_pipeline
+    interval: 30s
+    rules:
+
+      # Consumer lag growing — pipeline falling behind
+      - alert: KafkaConsumerLagHigh
+        expr: kafka_consumergroup_lag > 10000
+        for: 5m
+        labels:
+          severity: critical
+          team: data-engineering
+          pipeline: kafka
+        annotations:
+          summary: "Kafka consumer group {{ $labels.consumergroup }} lagging"
+          description: |
+            Consumer lag: {{ $value | humanize }} messages.
+            Topic: {{ $labels.topic }}, Partition: {{ $labels.partition }}.
+            Pipeline is falling behind real-time. Scale consumers or check for slow processing.
+
+      # Kafka consumer group offline
+      - alert: KafkaConsumerGroupOffline
+        expr: kafka_consumergroup_members == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: data-engineering
+        annotations:
+          summary: "Kafka consumer group {{ $labels.consumergroup }} has no active members"
+          description: "All consumers for group {{ $labels.consumergroup }} are offline."
+
+      # Topic message rate drops to zero
+      - alert: KafkaTopicNoMessages
+        expr: |
+          rate(kafka_topic_partition_current_offset[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          team: data-engineering
+        annotations:
+          summary: "No messages on Kafka topic {{ $labels.topic }}"
+          description: "Topic {{ $labels.topic }} has received no new messages in 5 minutes."
