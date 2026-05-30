@@ -39,6 +39,7 @@ from common.metrics import (
 )
 from common.logging_config import configure_logging, get_logger
 from common.tracing import configure_tracing
+from common.gcs_exporter import GCSExporter
 
 # ── Bootstrap ────────────────────────────────────────────────────
 SERVICE_NAME = os.getenv("SERVICE_NAME", "genai-pipeline")

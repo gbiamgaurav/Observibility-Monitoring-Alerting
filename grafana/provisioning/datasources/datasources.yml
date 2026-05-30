@@ -42,7 +42,6 @@ datasources:
     jsonData:
       esVersion: "8.0.0"
       timeField: "@timestamp"
-      interval: Daily
       logMessageField: message
       logLevelField: level
     editable: true
